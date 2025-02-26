@@ -2,33 +2,28 @@ import os
 import json
 
 def rename_files_and_update_annotations(folder_path):
-    # Получаем имя папки
-    folder_name = os.path.basename(folder_path)
+    annotation_file = os.path.join(folder_path, "_annotations.coco.json")
+    folder_name = os.path.basename(os.path.normpath(folder_path))
 
-    # Путь к файлу аннотаций
-    annotation_file = os.path.join(folder_path, '_annotations.coco.json')
+    with open(annotation_file, "r", encoding="utf-8") as f:
+        coco_data = json.load(f)
 
-    # Загружаем аннотации
-    with open(annotation_file, 'r') as f:
-        annotations = json.load(f)
+    id_to_filename = {img["id"]: img["file_name"] for img in coco_data["images"]}
 
-    # Получаем список всех файлов в папке
-    files = sorted([f for f in os.listdir(folder_path) if f.endswith('.jpg')])
+    for img in coco_data["images"]:
+        img_id = img["id"]
+        old_name = img["file_name"]
+        new_name = f"{folder_name}_{img_id:012d}.jpg"
+        old_path = os.path.join(folder_path, old_name)
+        new_path = os.path.join(folder_path, new_name)
 
-    for i, old_filename in enumerate(files):
-        # Новое имя файла
-        new_filename = f"{folder_name}_{i:012d}.jpg"
+        if os.path.exists(old_path):
+            os.rename(old_path, new_path)
+            img["file_name"] = new_name
+            print(f"{old_name} -> {new_name}")
+        else:
+            print(f"Файл {old_name} не найден")
 
-        # Переименовываем файл
-        old_filepath = os.path.join(folder_path, old_filename)
-        new_filepath = os.path.join(folder_path, new_filename)
-        os.rename(old_filepath, new_filepath)
+    with open(annotation_file, "w", encoding="utf-8") as f:
+        json.dump(coco_data, f, indent=4, ensure_ascii=False)
 
-        # Обновляем имена файлов в аннотациях
-        for annotation in annotations['images']:
-            if annotation['file_name'] == old_filename:
-                annotation['file_name'] = new_filename
-
-    # Сохраняем обновленные аннотации
-    with open(annotation_file, 'w') as f:
-        json.dump(annotations, f, indent=4)
