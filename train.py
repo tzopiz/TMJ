@@ -91,7 +91,9 @@ def train_step(
     for inputs, targets in tqdm(train_dataloader, desc="Training"):
         batch_idx += 1
         optimizer.zero_grad()
+        inputs = inputs.to(torch.float32)
         outputs = model(inputs)
+        targets = targets.unsqueeze(1)
         loss = loss_function(outputs, targets)
         metric = metric_function(outputs, targets)
         total_train_loss += loss.item()

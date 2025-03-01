@@ -4,9 +4,8 @@ import numpy as np
 from PIL import Image
 from torch.utils.data import Dataset
 from pycocotools.coco import COCO
-from torchvision.transforms import functional as F
 import torch
-
+import torchvision.transforms.functional as F
 
 class CustomCOCOSegmentation(Dataset):
     def __init__(self, root_dir: str, ann_file: str, transform=None):
@@ -17,7 +16,7 @@ class CustomCOCOSegmentation(Dataset):
         """
         self.root_dir = root_dir
         self.coco = COCO(ann_file)
-        self.ids = list(self.coco.imgToAnns.keys())  # ID изображений
+        self.ids = list(self.coco.imgs.keys())  # Исправлено: imgToAnns → imgs
         self.transform = transform
 
     def __getitem__(self, idx):
@@ -39,7 +38,6 @@ class CustomCOCOSegmentation(Dataset):
         mask = np.zeros((img_info['height'], img_info['width']), dtype=np.uint8)
         for ann in anns:
             class_id = ann['category_id']
-            # Маскируем пиксели для каждого класса
             mask = np.maximum(mask, self.coco.annToMask(ann) * class_id)
 
         # Преобразования
@@ -47,8 +45,11 @@ class CustomCOCOSegmentation(Dataset):
             augmented = self.transform(image=np.array(img), mask=mask)
             img = augmented['image']
             mask = augmented['mask']
+        else:
+            img = F.to_tensor(img)  # В `FloatTensor` [0,1]
+            mask = torch.tensor(mask, dtype=torch.long)  # В `LongTensor`
 
-        return img, mask.clone().detach().long()
+        return img, mask
 
     def __len__(self):
         return len(self.ids)

@@ -19,7 +19,7 @@ from torchvision.models import (
 FeaturesT = dict[str | None, torch.Tensor | None]
 
 
-class UNet(nn.Module):
+class UNetBackbone(nn.Module):
     def __init__(
         self,
         backbone_name: str = "resnet50",
