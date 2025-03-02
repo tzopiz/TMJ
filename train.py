@@ -141,6 +141,8 @@ def validation_step(
     total_val_loss, total_val_metric = 0.0, 0.0
     for inputs, targets in tqdm(val_dataloader, desc="Validation"):
         with torch.no_grad():
+            inputs = inputs.to(torch.float32)
+            targets = targets.unsqueeze(1)
             outputs = model(inputs)
             loss = loss_function(outputs, targets)
             metric = metric_function(outputs, targets)

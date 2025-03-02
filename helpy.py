@@ -85,28 +85,44 @@ def visualize_samples(dataset, idx_range):
     plt.tight_layout()
     plt.show()
 
-def dice_coeff(input: Tensor, target: Tensor, reduce_batch_first: bool = False, epsilon: float = 1e-6):
-    # Average of Dice coefficient for all batches, or for a single mask
-    assert input.size() == target.size()
-    assert input.dim() == 3 or not reduce_batch_first
+import os
+import numpy as np
+from PIL import Image
+from pycocotools.coco import COCO
 
-    sum_dim = (-1, -2) if input.dim() == 2 or not reduce_batch_first else (-1, -2, -3)
+def _create_mask(coco, image_id, class_name_to_index):
+    """
+    Создаёт многоканальную маску для изображения.
+    :param coco: объект COCO
+    :param image_id: ID изображения
+    :param class_name_to_index: словарь {имя_класса: индекс_в_маске}
+    :return: np.array маски с несколькими каналами
+    """
+    ann_ids = coco.getAnnIds(imgIds=image_id)
+    anns = coco.loadAnns(ann_ids)
 
-    inter = 2 * (input * target).sum(dim=sum_dim)
-    sets_sum = input.sum(dim=sum_dim) + target.sum(dim=sum_dim)
-    sets_sum = torch.where(sets_sum == 0, inter, sets_sum)
+    # Создаем пустую многоканальную маску
+    mask_shape = (coco.imgs[image_id]['height'], coco.imgs[image_id]['width'], len(class_name_to_index))
+    mask = np.zeros(mask_shape, dtype=np.uint8)
 
-    dice = (inter + epsilon) / (sets_sum + epsilon)
-    return dice.mean()
+    for ann in anns:
+        category_id = ann["category_id"]
+        class_index = class_name_to_index.get(coco.cats[category_id]["name"], None)
 
+        if class_index is not None:
+            mask[..., class_index] += coco.annToMask(ann)
 
-def multiclass_dice_coeff(input: Tensor, target: Tensor, reduce_batch_first: bool = False, epsilon: float = 1e-6):
-    # Average of Dice coefficient for all classes
-    return dice_coeff(input.flatten(0, 1), target.flatten(0, 1), reduce_batch_first, epsilon)
+    return mask
 
+def create_masks_for_all_images(coco, output_folder, class_name_to_index):
+    os.makedirs(output_folder, exist_ok=True)
+    image_ids = coco.getImgIds()
 
-def dice_loss(input: Tensor, target: Tensor, multiclass: bool = False):
-    # Dice loss (objective to minimize) between 0 and 1
-    fn = multiclass_dice_coeff if multiclass else dice_coeff
-    return 1 - fn(input, target, reduce_batch_first=True)
+    for image_id in image_ids:
+        mask = _create_mask(coco, image_id, class_name_to_index)
+
+        # Сохраняем каждый канал как отдельный PNG
+        for class_name, class_index in class_name_to_index.items():
+            mask_pil = Image.fromarray(mask[..., class_index] * 255)
+            mask_pil.save(os.path.join(output_folder, f"mask_{class_name}_{str(image_id).zfill(4)}.png"))
 

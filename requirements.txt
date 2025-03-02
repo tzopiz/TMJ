@@ -1,0 +1,9 @@
+albumentations
+numpy
+torch
+accelerate
+matplotlib
+Pillow
+torchvision
+tensorboard
+pycocotools
