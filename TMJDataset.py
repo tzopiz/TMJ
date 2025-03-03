@@ -40,43 +40,27 @@ class TMJDataset(Dataset):
         image = Image.open(image_path).convert("RGB")  # Преобразуем изображение в RGB формат
         img = np.array(image, dtype=np.uint8)
 
-
         filename = os.path.splitext(self.image_files[idx])[0]
         mask_name = f"mask_{filename}.npy"  # Формат имени маски
         mask_path = os.path.join(self.mask_dir, mask_name)
-        mask = np.load(mask_path)
+        mask = np.load(mask_path)  # Маска размером (584, 584)
 
-        assert self.transforms is not None
+        # Преобразуем маску в многоканальную
+        msk = self.create_multichannel_mask(mask)
+        msk = np.transpose(msk, (1, 2, 0))  # Получаем маску с двумя каналами (2, 584, 584)
 
-        augmented = self.transforms(image=img, mask=mask)
+        augmented = self.transforms(image=img, mask=msk)
 
-        return augmented["image"].float(), augmented["mask"].float()
+        return augmented["image"].float(), np.transpose(augmented["mask"].float(), (2, 0, 1))
 
-    def visualize(self, idx):
-        """
-        Визуализирует изображение и соответствующую маску по индексу.
+    @staticmethod
+    def create_multichannel_mask(mask):
+        # Создаём два канала, где:
+        # - Канал 0 будет для головки (1 для головки, 0 для остального)
+        # - Канал 1 будет для ямки (1 для ямки, 0 для остального)
 
-        :param idx: Индекс элемента в датасете.
-        """
-        # Получаем изображение и маску
-        img, mask = self[idx]
+        head_mask = (mask == 1).astype(np.uint8)  # 1 - головка, 0 - не головка
+        pit_mask = (mask == 2).astype(np.uint8)  # 1 - ямка, 0 - не ямка
 
-        # Если маска имеет более одного канала (например, цвета), то для визуализации будем показывать только один канал
-        if mask.ndimension() == 3:
-            mask = mask[0]  # Предполагаем, что маска представлена в одном канале
-
-        # Преобразуем в numpy для отображения
-        img = img.permute(1, 2, 0).cpu().numpy().astype(np.uint8)
-        mask = mask.cpu().numpy().astype(np.uint8)
-
-        # Визуализируем
-        fig, axes = plt.subplots(1, 2, figsize=(12, 6))
-        axes[0].imshow(img)
-        axes[0].set_title("Image")
-        axes[0].axis("off")
-
-        axes[1].imshow(mask, cmap="gray")
-        axes[1].set_title("Mask")
-        axes[1].axis("off")
-
-        plt.show()
+        multichannel_mask = np.stack([head_mask, pit_mask], axis=0)
+        return multichannel_mask
