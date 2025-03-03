@@ -2,8 +2,9 @@ import os
 import json
 import matplotlib.pyplot as plt
 import numpy as np
-import torch
-from torch import Tensor
+import cv2
+from pycocotools import mask as maskUtils
+from pycocotools.coco import COCO
 
 def rename_files_and_update_annotations(folder_path):
     annotation_file = os.path.join(folder_path, "annotations.json")
@@ -53,76 +54,174 @@ def rename_files_in_folder(folder_path):
         print(f"Renamed: {file} -> {new_name}")
 
 
-def visualize_samples(dataset, idx_range):
+def save_coco_masks(coco_annotation_path, output_dir):
+    with open(coco_annotation_path, 'r') as f:
+        coco_data = json.load(f)
+
+    # Создаём выходную директорию, если её нет
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Создаём словарь соответствия image_id -> file_name и размеров изображений
+    image_info = {img["id"]: (img["file_name"], img["width"], img["height"]) for img in coco_data["images"]}
+
+    # Группируем аннотации по image_id
+    annotations_by_image = {}
+    for annotation in coco_data["annotations"]:
+        image_id = annotation["image_id"]
+        if image_id not in annotations_by_image:
+            annotations_by_image[image_id] = []
+        annotations_by_image[image_id].append(annotation)
+
+    # Обрабатываем изображения
+    for image_id, annotations in annotations_by_image.items():
+        file_name, width, height = image_info.get(image_id, (f"image_{image_id}.png", None, None))
+        if width is None or height is None:
+            continue
+
+        # Создаём пустую цветную маску
+        mask = np.zeros((height, width, 3), dtype=np.uint8)
+
+        # Генерируем цвета для классов
+        np.random.seed(42)  # Фиксируем цвета для воспроизводимости
+        category_colors = {}
+
+        # Добавляем маски в изображение
+        for annotation in annotations:
+            category_id = annotation["category_id"]
+            if category_id not in category_colors:
+                category_colors[category_id] = np.random.randint(0, 255, 3, dtype=np.uint8)
+
+            segmentation = annotation["segmentation"]
+            if isinstance(segmentation, list):  # Полигональный формат
+                for polygon in segmentation:
+                    pts = np.array(polygon, dtype=np.int32).reshape(-1, 2)
+                    cv2.fillPoly(mask, [pts], color=category_colors[category_id].tolist())
+            elif isinstance(segmentation, dict):  # RLE формат
+                binary_mask = maskUtils.decode(segmentation)
+                mask[binary_mask == 1] = category_colors[category_id]
+            else:
+                raise ValueError("Формат сегментации не поддерживается.")
+
+        # Сохраняем маску
+        mask_path = os.path.join(output_dir, os.path.splitext(file_name)[0] + "_mask.png")
+        cv2.imwrite(mask_path, mask)
+
+    print(f"Маски сохранены в {output_dir}")
+
+
+def save_coco_masks_npy(coco_annotation_path, output_dir):
     """
-    Функция для визуализации изображений и масок по заданному диапазону индексов.
+    Сохраняет маски из аннотаций COCO в формате .npy без потерь качества.
 
-    :param dataset: Датасет, содержащий изображения и маски
-    :param idx_range: Диапазон индексов, для которых нужно отобразить изображения
+    :param coco_annotation_path: Путь к JSON файлу с аннотациями COCO
+    :param output_dir: Директория для сохранения масок
     """
-    # Размеры графиков
-    num_samples = len(idx_range)
-    fig, axes = plt.subplots(num_samples, 2, figsize=(12, 6 * num_samples))
+    # Загружаем аннотации
+    with open(coco_annotation_path, 'r') as f:
+        coco_data = json.load(f)
 
-    # Если только один элемент в диапазоне, axes будет не 2D, нужно обработать
-    if num_samples == 1:
-        axes = np.expand_dims(axes, axis=0)
+    # Создаём выходную директорию, если её нет
+    os.makedirs(output_dir, exist_ok=True)
 
-    for i, idx in enumerate(idx_range):
-        img, mask = dataset[idx]
-        img = np.array(img)
+    # Создаём словарь соответствия image_id -> размеры изображений
+    image_info = {img["id"]: (img["file_name"], img["width"], img["height"]) for img in coco_data["images"]}
 
-        # Отображаем изображение
-        axes[i, 0].imshow(img.transpose(1, 2, 0))  # Изменяем оси для корректного отображения
-        axes[i, 0].set_title(f"Image {idx}")
-        axes[i, 0].axis('off')
+    # Группируем аннотации по image_id
+    annotations_by_image = {}
+    for annotation in coco_data["annotations"]:
+        image_id = annotation["image_id"]
+        if image_id not in annotations_by_image:
+            annotations_by_image[image_id] = []
+        annotations_by_image[image_id].append(annotation)
 
-        # Отображаем маску
-        axes[i, 1].imshow(mask.numpy(), alpha=1.0)
-        axes[i, 1].set_title(f"Mask {idx}")
-        axes[i, 1].axis('off')
+    # Обрабатываем изображения
+    for image_id, annotations in annotations_by_image.items():
+        file_name, width, height = image_info.get(image_id, (f"image_{image_id}.png", None, None))
+        if width is None or height is None:
+            continue
 
-    plt.tight_layout()
-    plt.show()
+        # Создаём пустую маску (одноканальное изображение)
+        mask = np.zeros((height, width), dtype=np.uint8)
 
-import os
-import numpy as np
-from PIL import Image
-from pycocotools.coco import COCO
+        # Заполняем маску аннотациями
+        for annotation in annotations:
+            category_id = annotation["category_id"]  # Значение класса
+            segmentation = annotation["segmentation"]
 
-def _create_mask(coco, image_id, class_name_to_index):
-    """
-    Создаёт многоканальную маску для изображения.
-    :param coco: объект COCO
-    :param image_id: ID изображения
-    :param class_name_to_index: словарь {имя_класса: индекс_в_маске}
-    :return: np.array маски с несколькими каналами
-    """
-    ann_ids = coco.getAnnIds(imgIds=image_id)
-    anns = coco.loadAnns(ann_ids)
+            if isinstance(segmentation, list):  # Полигональный формат
+                for polygon in segmentation:
+                    pts = np.array(polygon, dtype=np.int32).reshape(-1, 2)
+                    cv2.fillPoly(mask, [pts], color=category_id)  # Заполняем область значением category_id
+            elif isinstance(segmentation, dict):  # RLE формат
+                binary_mask = maskUtils.decode(segmentation)
+                mask[binary_mask == 1] = category_id
+            else:
+                raise ValueError("Формат сегментации не поддерживается.")
 
-    # Создаем пустую многоканальную маску
-    mask_shape = (coco.imgs[image_id]['height'], coco.imgs[image_id]['width'], len(class_name_to_index))
-    mask = np.zeros(mask_shape, dtype=np.uint8)
+        # Сохраняем маску в формате .npy с именем mask_{filename}.npy
+        mask_path = os.path.join(output_dir, f"mask_{os.path.splitext(file_name)[0]}.npy")
+        np.save(mask_path, mask)
 
-    for ann in anns:
-        category_id = ann["category_id"]
-        class_index = class_name_to_index.get(coco.cats[category_id]["name"], None)
+    print(f"Маски сохранены в {output_dir} в формате .npy")
 
-        if class_index is not None:
-            mask[..., class_index] += coco.annToMask(ann)
 
-    return mask
+def merge_coco_json(json_files, output_file):
+    merged_annotations = {
+        "info": {},
+        "licenses": [],
+        "images": [],
+        "annotations": [],
+        "categories": []
+    }
 
-def create_masks_for_all_images(coco, output_folder, class_name_to_index):
-    os.makedirs(output_folder, exist_ok=True)
-    image_ids = coco.getImgIds()
+    image_id_offset = 0
+    annotation_id_offset = 0
+    category_id_offset = 0
+    existing_category_ids = set()
 
-    for image_id in image_ids:
-        mask = _create_mask(coco, image_id, class_name_to_index)
+    for idx, file in enumerate(json_files):
+        coco = COCO(file)
 
-        # Сохраняем каждый канал как отдельный PNG
-        for class_name, class_index in class_name_to_index.items():
-            mask_pil = Image.fromarray(mask[..., class_index] * 255)
-            mask_pil.save(os.path.join(output_folder, f"mask_{class_name}_{str(image_id).zfill(4)}.png"))
+        # Update image IDs to avoid conflicts
+        for image in coco.dataset['images']:
+            image['id'] += image_id_offset
+            merged_annotations['images'].append(image)
 
+        # Update annotation IDs to avoid conflicts
+        for annotation in coco.dataset['annotations']:
+            annotation['id'] += annotation_id_offset
+            annotation['image_id'] += image_id_offset
+            merged_annotations['annotations'].append(annotation)
+
+        # Update categories and their IDs to avoid conflicts
+        for category in coco.dataset['categories']:
+            if category['id'] not in existing_category_ids:
+                category['id'] += category_id_offset
+                merged_annotations['categories'].append(category)
+                existing_category_ids.add(category['id'])
+
+        image_id_offset = len(merged_annotations['images'])
+        annotation_id_offset = len(merged_annotations['annotations'])
+        category_id_offset = len(merged_annotations['categories'])
+
+    # Save merged annotations to output file
+    with open(output_file, 'w') as f:
+        json.dump(merged_annotations, f)
+
+def visualize_npy(file_path):
+    # Загружаем данные из .npy файла
+    data = np.load(file_path)
+
+    # Если данные многомерные (например, изображение)
+    if len(data.shape) == 2:
+        plt.imshow(data, cmap='gray')
+        plt.colorbar()
+        plt.show()
+    # Если это массив изображений (например, батч из изображений)
+    elif len(data.shape) == 3:
+        # Показать первое изображение в батче
+        plt.imshow(data[0], cmap='gray')
+        plt.colorbar()
+        plt.show()
+    else:
+        print("Данные имеют неподдерживаемую форму:", data.shape)
