@@ -5,6 +5,8 @@ import numpy as np
 import cv2
 from pycocotools import mask as maskUtils
 from pycocotools.coco import COCO
+import torch
+
 
 def rename_files_and_update_annotations(folder_path):
     annotation_file = os.path.join(folder_path, "annotations.json")
@@ -208,6 +210,7 @@ def merge_coco_json(json_files, output_file):
     with open(output_file, 'w') as f:
         json.dump(merged_annotations, f)
 
+
 def visualize_npy(file_path):
     # Загружаем данные из .npy файла
     data = np.load(file_path)
@@ -225,3 +228,21 @@ def visualize_npy(file_path):
         plt.show()
     else:
         print("Данные имеют неподдерживаемую форму:", data.shape)
+
+
+def compute_class_weights(dataset, num_classes):
+    class_pixel_count = np.zeros(num_classes)
+
+    for image, mask in dataset:
+        # Маска будет иметь форму (num_classes, height, width)
+        mask_np = mask.numpy()
+
+        for c in range(num_classes):
+            class_pixel_count[c] += np.sum(mask_np[c] == 1)
+
+    # Нормализуем веса
+    total_pixels = np.sum(class_pixel_count)
+    class_weights = total_pixels / (num_classes * class_pixel_count)
+
+    return class_weights
+
