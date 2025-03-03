@@ -184,11 +184,6 @@ def validation_step(
 
     return global_val_step
 
-
-class MulticlassCrossEntropyLoss(nn.CrossEntropyLoss):
-    def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        return super().forward(input=input, target=torch.argmax(target, dim=1))
-
 @dataclass
 class Checkpoint:
     metric_val: float

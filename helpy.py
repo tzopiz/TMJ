@@ -245,6 +245,7 @@ def compute_class_weights(dataset, num_classes):
 
     return class_weights
 
+
 def visualize_prediction(model, dataset, index, device, threshold=0.5):
     # Загружаем изображение и маску
     image, mask = dataset[index]
@@ -256,12 +257,12 @@ def visualize_prediction(model, dataset, index, device, threshold=0.5):
     image = image.permute(1, 2, 0).cpu().numpy().astype(np.uint8)
 
     # Разделяем маску на два канала
-    head_mask = mask[0].cpu().numpy()
-    pit_mask = mask[1].cpu().numpy()
+    head_mask = mask[1].cpu().numpy()
+    pit_mask = mask[2].cpu().numpy()
 
     # Предсказанные маски
-    head_mask_logits = logits[0].cpu().detach().numpy()
-    pit_mask_logits = logits[1].cpu().detach().numpy()
+    head_mask_logits = logits[1].cpu().detach().numpy()
+    pit_mask_logits = logits[2].cpu().detach().numpy()
 
     # Создаем фигуру для визуализации
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
@@ -271,14 +272,18 @@ def visualize_prediction(model, dataset, index, device, threshold=0.5):
     axes[0].set_title("Image (RGB)")
 
     # Визуализируем истинную маску (красный — головка, синий — ямка)
-    combined_mask = np.zeros((head_mask.shape[0], head_mask.shape[1], 3), dtype=np.uint8)
+    combined_mask = np.zeros(
+        (head_mask.shape[0], head_mask.shape[1], 3), dtype=np.uint8
+    )
     combined_mask[head_mask == 1] = [255, 0, 0]  # Красный для головки
     combined_mask[pit_mask == 1] = [0, 0, 255]  # Синий для ямки
     axes[1].imshow(combined_mask)
     axes[1].set_title("Ground Truth Mask")
 
     # Визуализируем предсказанную моделью маску
-    combined_mask_pred = np.zeros((head_mask.shape[0], head_mask.shape[1], 3), dtype=np.uint8)
+    combined_mask_pred = np.zeros(
+        (head_mask_logits.shape[0], head_mask_logits.shape[1], 3), dtype=np.uint8
+    )
     combined_mask_pred[head_mask_logits > threshold] = [255, 0, 0]
     combined_mask_pred[pit_mask_logits > threshold] = [0, 0, 255]
     axes[2].imshow(combined_mask_pred)
