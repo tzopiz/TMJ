@@ -1,10 +1,8 @@
 import os
 import numpy as np
-import matplotlib.pyplot as plt
-
 from torch.utils.data import Dataset
 from PIL import Image
-
+import matplotlib.pyplot as plt
 
 class TMJDataset(Dataset):
     def __init__(self, image_dir, mask_dir, transforms=None):
@@ -45,22 +43,58 @@ class TMJDataset(Dataset):
         mask_path = os.path.join(self.mask_dir, mask_name)
         mask = np.load(mask_path)  # Маска размером (584, 584)
 
-        # Преобразуем маску в многоканальную
-        msk = self.create_multichannel_mask(mask)
-        msk = np.transpose(msk, (1, 2, 0))  # Получаем маску с двумя каналами (2, 584, 584)
+        # Преобразуем маску в многоканальную (one-hot) форму
+        msk = self.create_multichannel_mask(mask)  # Маска теперь будет размерности (584, 584, 2)
+        msk = np.transpose(msk, (1, 2, 0))
 
+        # Применяем преобразования, если они есть
         augmented = self.transforms(image=img, mask=msk)
 
+        # Возвращаем изображение и маску в формате, который PyTorch понимает
         return augmented["image"].float(), np.transpose(augmented["mask"].float(), (2, 0, 1))
 
     @staticmethod
     def create_multichannel_mask(mask):
-        # Создаём два канала, где:
-        # - Канал 0 будет для головки (1 для головки, 0 для остального)
-        # - Канал 1 будет для ямки (1 для ямки, 0 для остального)
+        """
+        Создает маску в формате one-hot для двух классов:
+        0 — фон, 1 — головка, 2 — ямка.
+        """
+        # Канал 0 - головка (1 для головки, 0 для остального)
+        head_mask = (mask == 1).astype(np.uint8)
+        # Канал 1 - ямка (1 для ямки, 0 для остального)
+        pit_mask = (mask == 2).astype(np.uint8)
 
-        head_mask = (mask == 1).astype(np.uint8)  # 1 - головка, 0 - не головка
-        pit_mask = (mask == 2).astype(np.uint8)  # 1 - ямка, 0 - не ямка
-
+        # Стек из двух каналов (головка и ямка)
         multichannel_mask = np.stack([head_mask, pit_mask], axis=0)
+
         return multichannel_mask
+
+    def visualize(self, idx: int):
+        image, mask = self[idx]
+        image = image.permute(1, 2, 0).cpu().numpy().astype(np.uint8)
+
+        # Маска: разделим на два канала
+        head_mask = mask[0].cpu().numpy()
+        pit_mask = mask[1].cpu().numpy()
+
+        # Создаем фигуру для визуализации
+        fig, axes = plt.subplots(1, 2, figsize=(15, 5))
+
+        # Визуализируем изображение
+        axes[0].imshow(image)
+        axes[0].set_title("Image (RGB)")
+        axes[0].axis('off')
+
+        # Визуализируем маску для головки и ямки на одном графике
+        combined_mask = np.zeros((head_mask.shape[0], head_mask.shape[1], 3), dtype=np.uint8)
+
+        # Красный для головки, синий для ямки
+        combined_mask[head_mask == 1] = [255, 0, 0]  # Красный для головки
+        combined_mask[pit_mask == 1] = [0, 0, 255]  # Синий для ямки
+
+        axes[1].imshow(combined_mask)
+        axes[1].set_title("Combined Head and Pit Masks")
+        axes[1].axis('off')
+
+        plt.tight_layout()
+        plt.show()

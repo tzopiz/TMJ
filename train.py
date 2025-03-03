@@ -70,25 +70,25 @@ def train(
 
 
 def train_step(
-    epoch: int,
-    model: nn.Module,
-    optimizer: optim.Optimizer,
-    train_dataloader: DataLoader,
-    loss_function: Callable[[Any, Any], torch.Tensor],
-    metric_function: Callable[[Any, Any], torch.Tensor],
-    lr_scheduler: LRScheduler,  # learning rate scheduler.
-    accelerator: Accelerator,
-    checkpointer: CheckpointSaver,
-    tb_logger: SummaryWriter | None,  # tensorboard logger
-    global_train_step: int,
-    save_on_val: bool = True,  # saves checkpoint on the validation stage
-    show_every_x_batch: int = 30,
+        epoch: int,
+        model: nn.Module,
+        optimizer: optim.Optimizer,
+        train_dataloader: DataLoader,
+        loss_function: Callable[[Any, Any], torch.Tensor],
+        metric_function: Callable[[Any, Any], torch.Tensor],
+        lr_scheduler: LRScheduler,
+        accelerator: Accelerator,
+        checkpointer: CheckpointSaver,
+        tb_logger: SummaryWriter | None,
+        global_train_step: int,
+        save_on_val: bool = True,
+        show_every_x_batch: int = 30,
 ) -> int:
     model.train()
-
     batch_idx = 0
     total_train_loss, total_train_metric = 0.0, 0.0
-    for inputs, targets in tqdm(train_dataloader, desc="Training"):
+
+    for inputs, targets in tqdm(train_dataloader, desc="Training", dynamic_ncols=True):
         batch_idx += 1
         optimizer.zero_grad()
         outputs = model(inputs)
@@ -96,12 +96,13 @@ def train_step(
         metric = metric_function(outputs, targets)
         total_train_loss += loss.item()
         total_train_metric += metric.item()
+
         accelerator.backward(loss)
         optimizer.step()
 
+        # Log batch loss and metric
         if not batch_idx % show_every_x_batch:
-            print(f"Batch train loss: {loss.item():.5f}")
-            print(f"Batch train metric: {metric.item():.5f}")
+            tqdm.set_postfix(loss=loss.item(), metric=metric.item())
 
         if tb_logger is not None:
             tb_logger.add_scalar("loss_train_batch", loss.item(), global_train_step)
@@ -109,19 +110,22 @@ def train_step(
             global_train_step += 1
 
     lr_scheduler.step()
+
+    # Compute average loss and metric for the epoch
     total_train_loss /= len(train_dataloader)
     total_train_metric /= len(train_dataloader)
     print(f"Epoch train loss: {total_train_loss:.5f}")
     print(f"Epoch train metric: {total_train_metric:.5f}")
+
     if tb_logger is not None:
         tb_logger.add_scalar("loss_train_epoch", total_train_loss, epoch)
         tb_logger.add_scalar("metric_train_epoch", total_train_metric, epoch)
 
+    # Save checkpoint based on training metric (or validation metric if desired)
     if not save_on_val:
         checkpointer.save(metric_val=total_train_metric, epoch=epoch)
 
     return global_train_step
-
 
 def validation_step(
     epoch: int,
@@ -130,34 +134,51 @@ def validation_step(
     loss_function: Callable[[Any, Any], torch.Tensor],
     metric_function: Callable[[Any, Any], torch.Tensor],
     checkpointer: CheckpointSaver,
-    tb_logger: SummaryWriter | None,  # tensorboard logger
+    tb_logger: SummaryWriter | None,
     global_val_step: int,
-    save_on_val: bool = True,  # saves checkpoint on the validation stage
+    save_on_val: bool = True,
 ) -> int:
     model.eval()
 
     total_val_loss, total_val_metric = 0.0, 0.0
-    for inputs, targets in tqdm(val_dataloader, desc="Validation"):
-        with torch.no_grad():
-            outputs = model(inputs)
-            loss = loss_function(outputs, targets)
-            metric = metric_function(outputs, targets)
-            total_val_loss += loss.item()
-            total_val_metric += metric.item()
 
-        if tb_logger is not None:
-            tb_logger.add_scalar("loss_val_batch", loss.item(), global_val_step)
-            tb_logger.add_scalar("metric_val_batch", metric.item(), global_val_step)
-            global_val_step += 1
+    # Для улучшения читаемости и обновления прогресса в tqdm
+    for inputs, targets in tqdm(val_dataloader, desc="Validation", dynamic_ncols=True):
+        try:
+            with torch.no_grad():
+                outputs = model(inputs)
+                loss = loss_function(outputs, targets)
+                metric = metric_function(outputs, targets)
+                total_val_loss += loss.item()
+                total_val_metric += metric.item()
 
-    total_val_loss /= len(val_dataloader)
-    total_val_metric /= len(val_dataloader)
+            # Логирование результатов для TensorBoard
+            if tb_logger is not None:
+                tb_logger.add_scalar("loss_val_batch", loss.item(), global_val_step)
+                tb_logger.add_scalar("metric_val_batch", metric.item(), global_val_step)
+                global_val_step += 1
+
+        except Exception as e:
+            print(f"Error in validation batch: {e}")
+            continue  # продолжаем с следующей итерации
+
+    if len(val_dataloader) > 0:  # защита от деления на ноль
+        total_val_loss /= len(val_dataloader)
+        total_val_metric /= len(val_dataloader)
+    else:
+        print("Warning: Validation dataloader is empty!")
+        total_val_loss, total_val_metric = 0.0, 0.0
+
+    # Вывод средних потерь и метрик по всей эпохе
     print(f"Epoch validation loss: {total_val_loss:.5f}")
     print(f"Epoch validation metric: {total_val_metric:.5f}")
+
+    # Логирование результатов по эпохе
     if tb_logger is not None:
         tb_logger.add_scalar("loss_val_epoch", total_val_loss, epoch)
         tb_logger.add_scalar("metric_val_epoch", total_val_metric, epoch)
 
+    # Сохранение чекпойнта
     if save_on_val:
         checkpointer.save(metric_val=total_val_metric, epoch=epoch)
 
@@ -167,184 +188,6 @@ def validation_step(
 class MulticlassCrossEntropyLoss(nn.CrossEntropyLoss):
     def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         return super().forward(input=input, target=torch.argmax(target, dim=1))
-
-
-EPSILON = 1e-7
-
-
-class MulticlassDiceLoss(nn.Module):
-    def __init__(self, eps: float = EPSILON) -> None:
-        super().__init__()
-
-        self.eps = eps
-
-    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        probas = F.softmax(logits, dim=1)
-
-        intersection = (targets * probas).sum((0, 2, 3)).clamp_min(self.eps)
-        cardinality = (targets + probas).sum((0, 2, 3)).clamp_min(self.eps)
-
-        dice_coefficient = (2.0 * intersection + self.eps) / (cardinality + self.eps)
-
-        dice_loss = 1.0 - dice_coefficient
-
-        mask = targets.sum((0, 2, 3)) > 0
-        dice_loss *= mask
-
-        return dice_loss.mean()
-
-
-LongTensorT = torch.LongTensor
-
-
-class IoUMetric(nn.Module):
-    def __init__(
-        self,
-        classes_num: int,
-        ignore_index: int | None = None,
-        reduction: str | None = None,
-        class_weights: list[float] | None = None,
-    ) -> None:
-        super().__init__()
-
-        self.cls_num = classes_num
-        self.ignore_index = ignore_index
-        self.reduction = reduction
-        self.class_weights = class_weights
-
-    @torch.no_grad()
-    def forward(
-        self,
-        output: torch.Tensor,
-        target: torch.Tensor,
-    ) -> torch.Tensor:
-        # from
-        # https://github.com/qubvel/segmentation_models.pytorch/blob/master
-        # /segmentation_models_pytorch/metrics/functional.py
-
-        outputs = torch.argmax(output, dim=1).long()
-        targets = torch.argmax(target, dim=1).long()
-
-        batch_size, height, width = outputs.shape
-
-        if self.ignore_index is not None:
-            ignore = cast(torch.Tensor, targets == self.ignore_index)
-            outputs = torch.where(ignore, -1, outputs)
-            targets = torch.where(ignore, -1, targets)
-
-        tp_count = cast(
-            LongTensorT, torch.zeros(batch_size, self.cls_num, dtype=torch.long)
-        )
-        fp_count = cast(
-            LongTensorT, torch.zeros(batch_size, self.cls_num, dtype=torch.long)
-        )
-        fn_count = cast(
-            LongTensorT, torch.zeros(batch_size, self.cls_num, dtype=torch.long)
-        )
-
-        for i in range(batch_size):
-            target_i = targets[i]
-            output_i = outputs[i]
-            mask = output_i == target_i
-            matched = torch.where(mask, target_i, -1)
-            tp = torch.histc(
-                matched.float(), bins=self.cls_num, min=0, max=self.cls_num - 1
-            )
-            fp = (
-                torch.histc(
-                    output_i.float(), bins=self.cls_num, min=0, max=self.cls_num - 1
-                )
-                - tp
-            )
-            fn = (
-                torch.histc(
-                    target_i.float(), bins=self.cls_num, min=0, max=self.cls_num - 1
-                )
-                - tp
-            )
-
-            tp_count[i] = tp.long()
-            fp_count[i] = fp.long()
-            fn_count[i] = fn.long()
-
-        return _compute_iou_metric(
-            tp=tp_count,
-            fp=fp_count,
-            fn=fn_count,
-            reduction=self.reduction,
-            class_weights=self.class_weights,
-        )
-
-
-def _compute_iou_metric(
-    tp: LongTensorT,
-    fp: LongTensorT,
-    fn: LongTensorT,
-    reduction: str | None = None,
-    class_weights: list[float] | None = None,
-) -> torch.Tensor:
-    if class_weights is None and reduction is not None and "weighted" in reduction:
-        raise ValueError(
-            f"Class weights should be provided for `{reduction}` reduction."
-        )
-
-    class_weights = class_weights if class_weights is not None else 1.0
-    class_weights = torch.tensor(class_weights).to(tp.device)
-    class_weights = class_weights / class_weights.sum()
-
-    if reduction == "micro":
-        tp = cast(LongTensorT, tp.sum())
-        fp = cast(LongTensorT, fp.sum())
-        fn = cast(LongTensorT, fn.sum())
-        score = _iou_score(tp, fp, fn)
-
-    elif reduction == "macro":
-        tp = cast(LongTensorT, tp.sum(0))
-        fp = cast(LongTensorT, fp.sum(0))
-        fn = cast(LongTensorT, fn.sum(0))
-        score = _handle_zero_division(_iou_score(tp, fp, fn))
-        score = (score * class_weights).mean()
-
-    elif reduction == "weighted":
-        tp = cast(LongTensorT, tp.sum(0))
-        fp = cast(LongTensorT, fp.sum(0))
-        fn = cast(LongTensorT, fn.sum(0))
-        score = _handle_zero_division(_iou_score(tp, fp, fn))
-        score = (score * class_weights).sum()
-
-    elif reduction == "micro-imagewise":
-        tp = cast(LongTensorT, tp.sum(1))
-        fp = cast(LongTensorT, fp.sum(1))
-        fn = cast(LongTensorT, fn.sum(1))
-        score = _handle_zero_division(_iou_score(tp, fp, fn))
-        score = score.mean()
-
-    elif reduction == "macro-imagewise" or reduction == "weighted-imagewise":
-        score = _iou_score(tp, fp, fn)
-        score = (score.mean(0) * class_weights).mean()
-
-    elif reduction == "none" or reduction is None:
-        score = _iou_score(tp, fp, fn)
-
-    else:
-        raise ValueError(
-            "`reduction` should be in [micro, macro, weighted, micro-imagewise, "
-            "macro-imagesize, weighted-imagewise, none, None]"
-        )
-
-    return score
-
-
-def _iou_score(tp: LongTensorT, fp: LongTensorT, fn: LongTensorT) -> torch.Tensor:
-    return tp / (tp + fp + fn)
-
-
-def _handle_zero_division(x: torch.Tensor) -> torch.Tensor:
-    nans = torch.isnan(x)
-    value = torch.tensor(0.0, dtype=x.dtype).to(x.device)
-    x = torch.where(nans, value, x)
-    return x
-
 
 @dataclass
 class Checkpoint:
