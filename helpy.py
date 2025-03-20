@@ -1,11 +1,17 @@
 import os
 import json
+import matplotlib.patches as patches
 import matplotlib.pyplot as plt
 import numpy as np
+import pydicom
 import cv2
+import torch
+
 from pycocotools import mask as maskUtils
 from pycocotools.coco import COCO
-import torch
+from PIL import Image
+from torchvision import transforms
+
 
 
 def rename_files_and_update_annotations(folder_path):
@@ -291,3 +297,142 @@ def visualize_prediction(model, dataset, index, device, threshold=0.5):
 
     plt.tight_layout()
     plt.show()
+
+
+def calculate_head_height(mask, intersection_point):
+    x_intersect, y_intersect = intersection_point
+
+    # Берем все точки маски, которые лежат на этой вертикальной оси
+    y_indices = np.where(mask[:, x_intersect] > 0)[0]
+
+    if len(y_indices) == 0:
+        raise ValueError("Нет точек маски на оси X = x_intersect")
+
+    # Самая верхняя точка среди них
+    y_top = y_indices.min()
+
+    # Высота — разница по оси Y
+    height = abs(y_intersect - y_top)
+
+    return height
+
+
+
+def visualize_with_axes(scaled_mask, x_top, y_extreme, height=None):
+    plt.figure(figsize=(6, 6))
+    plt.imshow(scaled_mask, cmap='binary')
+
+    # Рисуем оси
+    plt.axvline(x=x_top, color='red', linestyle='--', linewidth=1)
+    plt.axhline(y=y_extreme, color='red', linestyle='--', linewidth=1)
+    plt.scatter(x_top, y_extreme, color='red', s=50)
+
+    # Если передана высота, добавляем визуальное обозначение
+    if height is not None:
+        plt.gca().add_patch(patches.FancyArrow(
+            x_top + 10,
+            y_extreme - 5,
+            0,
+            0,
+            width=1,
+            head_width=5,
+            head_length=5,
+            color='blue')
+        )
+        plt.gca().add_patch(patches.FancyArrow(
+            x_top + 10,
+            y_extreme - 5,
+            0,
+            -height + 20,
+            width=1,
+            head_width=5,
+            head_length=5,
+            color='blue')
+        )
+        # Подпись высоты
+        plt.text(
+            x_top + 15,
+            y_extreme - height / 2,
+            f"Высота: {height}",
+            color='blue',
+            fontsize=12,
+            verticalalignment='center',
+            weight='bold'
+        )
+
+    plt.axis("off")
+    plt.show()
+
+
+def visualize_mask(mask_tensor, title="Маска"):
+    plt.figure(figsize=(5, 5))
+    plt.imshow(mask_tensor.numpy())
+    plt.title(title)
+    plt.axis('off')
+    plt.show()
+
+
+def find_axes(mask):
+    ys, xs = np.where(mask > 0)
+
+    y_top = ys.min()
+    x_top = xs[np.argmin(ys)]
+    is_right = x_top < mask.shape[1] // 2
+    x_min, x_max = xs.min(), xs.max()
+
+    if is_right:
+        x_extreme = x_max
+    else:
+        x_extreme = x_min
+    y_extreme = ys[xs == x_extreme].mean().astype(int)
+
+    x_intersect, y_intersect = x_top, y_extreme
+
+    # Коррекция точки пересечения, если она не принадлежит маске
+    while x_intersect >= 0 and x_intersect < mask.shape[1] and mask[y_intersect, x_intersect] == 0:
+        if is_right:
+            x_intersect += 1  # Двигаем влево
+        else:
+            x_intersect -= 1  # Двигаем вправо
+
+    return x_intersect, y_intersect
+
+
+def scale_head_mask(mask, scale_factor=4, padding=10):
+    # Извлекаем маску головки
+    head_mask = mask[1].cpu().numpy() if isinstance(mask, torch.Tensor) else mask[1]
+
+    # Находим координаты непустых пикселей
+    y_indices, x_indices = np.where(head_mask > 0)
+    if len(y_indices) == 0:
+        raise ValueError("Головка не найдена в маске")
+
+    # Определяем границы
+    y_min, y_max = y_indices.min(), y_indices.max()
+    x_min, x_max = x_indices.min(), x_indices.max()
+
+    # Вырезаем область головки
+    cropped = head_mask[y_min:y_max + 1, x_min:x_max + 1]
+
+    # Масштабируем изображение с интерполяцией
+    h, w = cropped.shape
+    resized = cv2.resize(
+        cropped, (w * scale_factor, h * scale_factor),
+        interpolation=cv2.INTER_NEAREST
+    )
+
+    # Добавляем отступы
+    padded = np.pad(resized, padding, mode='constant', constant_values=0)
+
+    return padded
+
+def compute_areas(mask):
+    background_area = torch.sum(mask[0]).item()  # Количество пикселей фона
+    head_area = torch.sum(mask[1]).item()        # Количество пикселей головки
+    pit_area = torch.sum(mask[2]).item()         # Количество пикселей ямки
+
+    return {
+        "background": background_area,
+        "head": head_area,
+        "pit": pit_area
+    }
