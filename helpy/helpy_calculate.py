@@ -2,7 +2,7 @@ import numpy as np
 import torch
 
 
-def calculate_axes(mask):
+def calculate_back_axes(mask):
     ys, xs = np.where(mask > 0)
 
     y_top = ys.min()
@@ -25,7 +25,7 @@ def calculate_axes(mask):
         else:
             x_intersect -= 1  # Двигаем вправо
 
-    return (x_top, y_top, x_intersect), (x_extreme, y_extreme), (x_intersect, y_intersect)
+    return (x_top, y_top), (x_extreme, y_extreme), (x_intersect, y_intersect)
 
 
 def find_intersection(mask, x_coord):
@@ -70,6 +70,45 @@ def calculate_head_height(mask, intersection_point):
     height = abs(y_intersect - y_top)
 
     return height
+
+
+def calculate_front_axes(mask):
+    ys, xs = np.where(mask > 0)
+
+    y_top = ys.min()
+    x_top = xs[np.argmin(ys)]
+    is_right = x_top < mask.shape[1] // 2
+    x_min, x_max = xs.min(), xs.max()
+
+    if is_right:
+        x_extreme = x_max
+    else:
+        x_extreme = x_min
+    y_extreme = ys[xs == x_extreme].mean().astype(int)
+
+    x_intersect, y_intersect = x_top, y_extreme
+
+    while 0 < x_intersect < mask.shape[1] and mask[y_intersect, x_intersect + 1] != 0:
+        if is_right:
+            x_intersect -= 1  # Двигаем влево
+        else:
+            x_intersect += 1  # Двигаем вправо
+
+    for i in range(0, 500):
+        if is_right:
+            y_intersect += 1
+        else:
+            if y_intersect + 1 < mask.shape[1] and mask[x_intersect + 1, y_intersect + 1] == 0:
+                y_intersect += 1
+            else:
+                break
+
+            if xs[ys == y_intersect].max() > x_intersect and x_intersect != x_extreme:
+                break
+            else:
+                x_intersect = xs[ys == y_intersect].max()
+
+    return (x_top, y_top), (x_extreme, y_extreme), (x_intersect, y_intersect)
 
 
 def calculate_areas(mask):

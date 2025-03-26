@@ -3,35 +3,22 @@ from torch import Tensor, nn
 
 EPSILON = 1e-6
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
 class DiceLoss(nn.Module):
-    def __init__(self, weights: Tensor | None = None, epsilon: float = EPSILON) -> None:
+    def __init__(self, eps: float = 1e-8):
         super().__init__()
-        self.register_buffer("weights", weights if weights is not None else torch.ones(1))
-        self.epsilon = epsilon
+        self.eps = eps
 
-    def forward(self, inputs: Tensor, targets: Tensor) -> Tensor:
-        probs = torch.sigmoid(inputs)  # Сигмоид на входе
-        per_channel_dice = compute_dice_per_channel(
-            probs=probs, targets=targets, epsilon=self.epsilon, weights=self.weights
-        )
-        return 1.0 - per_channel_dice.mean()
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        probas = torch.sigmoid(logits)  # Преобразуем логиты в вероятности
 
-def compute_dice_per_channel(
-        probs: Tensor,
-        targets: Tensor,
-        epsilon: float = EPSILON,
-        weights: Tensor | None = None
-) -> Tensor:
-    assert probs.size() == targets.size(), "Размеры inputs и targets должны совпадать!"
+        intersection = (targets * probas).sum((0, 2, 3)).clamp_min(self.eps)
+        cardinality = (targets + probas).sum((0, 2, 3)).clamp_min(self.eps)
 
-    probs = probs.transpose(1, 0).flatten(2)
-    targets = targets.transpose(1, 0).flatten(2).float()
+        dice_coefficient = (2.0 * intersection + self.eps) / (cardinality + self.eps)
+        dice_loss = 1.0 - dice_coefficient
 
-    numerator = (probs * targets).sum(dim=-1)
-    denominator = (probs + targets).sum(dim=-1)
-
-    if weights is not None and weights.shape[0] == numerator.shape[0]:  # Проверка размеров
-        numerator = numerator * weights.unsqueeze(1)  # Расширяем размерность весов
-
-    dice_score = (2 * numerator) / denominator.clamp(min=epsilon)
-    return dice_score.mean(dim=1)  # Среднее по batch
+        return dice_loss.mean()

@@ -51,7 +51,7 @@ def visualize_prediction(model, dataset, index, device, threshold=0.5):
 
 
 def visualize_with_axes(scaled_mask, x_top, y_extreme, height=None):
-    plt.figure(figsize=(6, 6))
+    plt.figure(figsize=(7, 7))
     plt.imshow(scaled_mask, cmap='binary')
 
     # Рисуем оси
@@ -96,7 +96,7 @@ def visualize_with_axes(scaled_mask, x_top, y_extreme, height=None):
     plt.show()
 
 
-def visualize_with_angle(mask, upper_point, intersection_point, lower_point, angle):
+def visualize_with_back_angle(mask, upper_point, intersection_point, lower_point, angle):
     plt.figure(figsize=(7, 7))
     plt.imshow(mask, cmap='binary')
 
