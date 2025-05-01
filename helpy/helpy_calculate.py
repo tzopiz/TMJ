@@ -1,39 +1,98 @@
 import numpy as np
 import torch
+import cv2
+
+from scipy.spatial.distance import directed_hausdorff
 
 
-def calculate_back_axes(mask):
-    ys, xs = np.where(mask > 0)
+def compute_curvature(contour):
+    dx = np.gradient(contour[:, 0])
+    dy = np.gradient(contour[:, 1])
+    ddx = np.gradient(dx)
+    ddy = np.gradient(dy)
+    curvature = (dx * ddy - dy * ddx) / (dx ** 2 + dy ** 2) ** (3 / 2)
+    return curvature
 
-    y_top = ys.min()
-    x_top = xs[np.argmin(ys)]
-    is_right = x_top < mask.shape[1] // 2
-    x_min, x_max = xs.min(), xs.max()
+def find_key_points(mask: np.ndarray, use_avarage: bool = False):
+    mask = (mask * 255).astype(np.uint8) if mask.dtype != np.uint8 else mask
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    if is_right:
-        x_extreme = x_max
-    else:
-        x_extreme = x_min
-    y_extreme = ys[xs == x_extreme].mean().astype(int)
+    if not contours:
+        return None, None, None
 
-    x_intersect, y_intersect = x_top, y_extreme
+    contour = max(contours, key=cv2.contourArea)
+    contour = contour[:, 0, :]
 
-    # Коррекция точки пересечения, если она не принадлежит маске
-    while 0 < x_intersect < mask.shape[1] and mask[y_intersect, x_intersect] == 0:
-        if is_right:
-            x_intersect += 1  # Двигаем влево
-        else:
-            x_intersect -= 1  # Двигаем вправо
+    min_y = np.min(contour[:, 1])
+    top_points = contour[contour[:, 1] == min_y]
 
-    return (x_top, y_top), (x_extreme, y_extreme), (x_intersect, y_intersect)
+    top_point = tuple(top_points[0])
+    if len(top_points) > 1 and use_avarage:
+        top_point = tuple(top_points[0] + (top_points[-1] - top_points[0]) / 2)
+
+    # Найдем точку с максимальным X и минимальным Y среди точек с максимальным X
+    max_x = np.max(contour[:, 0])
+    right_points = contour[contour[:, 0] == max_x]
+    right_point = tuple(min(right_points, key=lambda p: p[1]))
+    if len(right_points) > 1 and use_avarage:
+        right_point = tuple(right_points[0] + (right_points[-1] - right_points[0]) / 2)
+
+    x_center = top_point[0]
+
+    left_half = contour[contour[:, 0] < x_center]
+    max_x_points = left_half
+
+    filtered_points = []
+    for point in max_x_points:
+        x, y = point
+        left_side = left_half[left_half[:, 1] < y]
+        right_side = left_half[left_half[:, 1] > y]
+        if (left_side[:, 0] < x).any() and (right_side[:, 0] < x).any():
+            filtered_points.append(point)
+
+    # Вычисляем кривизну
+    curvature = compute_curvature(contour)
+
+    min_curvature_idx = np.argmax(curvature)
+    concave_point = tuple(contour[min_curvature_idx])
+
+    return top_point, right_point, concave_point
+
+
+def calculate_front_axes(mask):
+    mask = (mask * 255).astype(np.uint8) if mask.dtype != np.uint8 else mask
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contour = max(contours, key=cv2.contourArea)
+    contour = contour[:, 0, :]
+
+    curvature = compute_curvature(contour)
+    min_curvature_idx = np.argmin(curvature)
+    concave_point = tuple(contour[min_curvature_idx])
+
+    return concave_point
 
 
 def find_intersection(mask, x_coord):
     height = mask.shape[0]
-    for y in range(height - 1, -1, -1):  # Идем снизу вверх
+    intersection = None
+
+    # Округляем до ближайшего целого
+    x_coord = int(round(x_coord))
+
+    # Идем снизу вверх
+    for y in range(height - 1, -1, -1):
         if mask[y, x_coord] > 0:
-            return (x_coord, y)
-    return None
+            max_x = -1
+            for x in range(mask.shape[1] - 1, -1, -1):
+                if mask[y, x] > 0:
+                    max_x = x
+                    break
+
+            if max_x != -1:
+                intersection = (max_x, y)
+                break
+
+    return intersection
 
 
 def calculate_angle(p1, p2, p3):
@@ -57,6 +116,9 @@ def calculate_angle(p1, p2, p3):
 def calculate_head_height(mask, intersection_point):
     x_intersect, y_intersect = intersection_point
 
+    # Округляем x до ближайшего индекса
+    x_intersect = int(round(x_intersect))
+
     # Берем все точки маски, которые лежат на этой вертикальной оси
     y_indices = np.where(mask[:, x_intersect] > 0)[0]
 
@@ -70,45 +132,6 @@ def calculate_head_height(mask, intersection_point):
     height = abs(y_intersect - y_top)
 
     return height
-
-
-def calculate_front_axes(mask):
-    ys, xs = np.where(mask > 0)
-
-    y_top = ys.min()
-    x_top = xs[np.argmin(ys)]
-    is_right = x_top < mask.shape[1] // 2
-    x_min, x_max = xs.min(), xs.max()
-
-    if is_right:
-        x_extreme = x_max
-    else:
-        x_extreme = x_min
-    y_extreme = ys[xs == x_extreme].mean().astype(int)
-
-    x_intersect, y_intersect = x_top, y_extreme
-
-    while 0 < x_intersect < mask.shape[1] and mask[y_intersect, x_intersect + 1] != 0:
-        if is_right:
-            x_intersect -= 1  # Двигаем влево
-        else:
-            x_intersect += 1  # Двигаем вправо
-
-    for i in range(0, 500):
-        if is_right:
-            y_intersect += 1
-        else:
-            if y_intersect + 1 < mask.shape[1] and mask[x_intersect + 1, y_intersect + 1] == 0:
-                y_intersect += 1
-            else:
-                break
-
-            if xs[ys == y_intersect].max() > x_intersect and x_intersect != x_extreme:
-                break
-            else:
-                x_intersect = xs[ys == y_intersect].max()
-
-    return (x_top, y_top), (x_extreme, y_extreme), (x_intersect, y_intersect)
 
 
 def calculate_areas(mask):
@@ -138,3 +161,93 @@ def calculate_class_weights(dataset, num_classes):
     class_weights = total_pixels / (num_classes * class_pixel_count)
 
     return class_weights
+
+
+def compute_metrics(pred, target, eps=1e-6):
+    # Преобразуем numpy массивы в тензоры PyTorch
+    pred = torch.tensor(pred).bool()
+    target = torch.tensor(target).bool()
+
+    TP = (pred & target).sum().float()
+    FP = (pred & ~target).sum().float()
+    FN = (~pred & target).sum().float()
+    TN = (~pred & ~target).sum().float()
+
+    dice = (2 * TP + eps) / (2 * TP + FP + FN + eps)
+    iou = (TP + eps) / (TP + FP + FN + eps)
+    accuracy = (TP + TN) / (TP + TN + FP + FN + eps)
+    precision = (TP + eps) / (TP + FP + eps)
+    recall = (TP + eps) / (TP + FN + eps)
+    specificity = (TN + eps) / (TN + FP + eps)
+    f1_score = (2 * precision * recall) / (precision + recall + eps)
+
+    return {
+        "Dice": dice.item(),
+        "IoU": iou.item(),
+        "Accuracy": accuracy.item(),
+        "Precision": precision.item(),
+        "Recall": recall.item(),
+        "Specificity": specificity.item(),
+        "F1 Score": f1_score.item()
+    }
+
+
+def hausdorff_distance(pred, target):
+    pred_points = np.argwhere(pred)
+    target_points = np.argwhere(target)
+
+    if len(pred_points) == 0 or len(target_points) == 0:
+        return np.inf
+
+    return max(
+        directed_hausdorff(pred_points, target_points)[0],
+        directed_hausdorff(target_points, pred_points)[0]
+    )
+
+
+def evaluate_model_on_test_set(model, test_dataloader, device):
+    model.eval()
+
+    # Для накопления метрик
+    metrics_sum = {
+        "Dice": [0, 0],
+        "IoU": [0, 0],
+        "Accuracy": [0, 0],
+        "Precision": [0, 0],
+        "Recall": [0, 0],
+        "Specificity": [0, 0],
+        "F1 Score": [0, 0],
+        "Hausdorff": [0, 0]
+    }
+    count = 0
+
+    # Оценка на всем тестовом датасете
+    with torch.no_grad():
+        for images, masks in test_dataloader:
+            images = images.to(device)
+            masks = masks.cpu().numpy()  # Истинные маски (batch, 2, 512, 512)
+
+            logits = model(images)  # (batch, 2, 512, 512)
+            probas = torch.sigmoid(logits).cpu().numpy()
+            preds = (probas > 0.5)  # Бинаризация
+
+            for i in range(images.shape[0]):  # Перебираем батч
+                for cls in range(2):  # Два класса: головка (0) и впадина (1)
+                    met = compute_metrics(preds[i, cls], masks[i, cls])
+                    for key in met:
+                        metrics_sum[key][cls] += met[key]
+
+                    # Hausdorff отдельно
+                    hd = hausdorff_distance(preds[i, cls], masks[i, cls])
+                    metrics_sum["Hausdorff"][cls] += hd
+
+                count += 1
+
+    # Усреднение
+    for key in metrics_sum:
+        metrics_sum[key] = [x / count for x in metrics_sum[key]]
+
+    # Возвращаем результаты
+    return metrics_sum
+
+

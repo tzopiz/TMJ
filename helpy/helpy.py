@@ -112,12 +112,6 @@ def save_coco_masks(coco_annotation_path, output_dir):
 
 
 def save_coco_masks_npy(coco_annotation_path, output_dir):
-    """
-    Сохраняет маски из аннотаций COCO в формате .npy без потерь качества.
-
-    :param coco_annotation_path: Путь к JSON файлу с аннотациями COCO
-    :param output_dir: Директория для сохранения масок
-    """
     # Загружаем аннотации
     with open(coco_annotation_path, 'r') as f:
         coco_data = json.load(f)
